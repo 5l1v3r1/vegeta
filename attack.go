@@ -141,9 +141,9 @@ func attack(opts *attackOpts) (err error) {
 	}
 
 	var (
-		tr       vegeta.Targeter
-		src      = files[opts.targetsf]
-		hdr      = opts.headers.Header
+		tr  vegeta.Targeter
+		src = files[opts.targetsf]
+		hdr = opts.headers.Header
 	)
 
 	switch opts.format {
@@ -176,8 +176,8 @@ func attack(opts *attackOpts) (err error) {
 	}
 
 	atk := vegeta.Attacker{
-		Hitter: hitter,
-		Workers: opts.workers,
+		Hitter:     hitter,
+		Workers:    opts.workers,
 		MaxWorkers: opts.maxWorkers,
 	}
 
@@ -208,10 +208,10 @@ func newHitter(opts *attackOpts) (vegeta.Hitter, error) {
 		return nil, err
 	}
 
-	if opts.http2 || opts.h2c || opts.unixSocket != "" {
+	if opts.http2 || opts.h2c {
 		dialer := net.Dialer{
 			LocalAddr: &net.TCPAddr{
-				IP: opts.laddr.IP,
+				IP:   opts.laddr.IP,
 				Zone: opts.laddr.Zone,
 			},
 			KeepAlive: 30 * time.Second,
@@ -223,12 +223,12 @@ func newHitter(opts *attackOpts) (vegeta.Hitter, error) {
 			TLSClientConfig:     tlsc,
 			MaxIdleConnsPerHost: opts.connections,
 			MaxConnsPerHost:     opts.maxConnections,
-			DisableKeepAlives: !opts.keepalive,
-			ProxyConnectHeader: opts.proxyHeaders.Header,
+			DisableKeepAlives:   !opts.keepalive,
+			ProxyConnectHeader:  opts.proxyHeaders.Header,
 		}
 
 		client := &http.Client{
-			Timeout: opts.timeout,
+			Timeout:   opts.timeout,
 			Transport: tr,
 			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 				switch {
@@ -240,6 +240,12 @@ func newHitter(opts *attackOpts) (vegeta.Hitter, error) {
 					return nil
 				}
 			},
+		}
+
+		if opts.unixSocket != "" {
+			tr.DialContext = func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", opts.unixSocket)
+			}
 		}
 
 		switch {
@@ -254,10 +260,6 @@ func newHitter(opts *attackOpts) (vegeta.Hitter, error) {
 					return tr.DialContext(context.Background(), network, addr)
 				},
 			}
-		case opts.unixSocket != "":
-			tr.DialContext = func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", opts.unixSocket)
-			}
 		}
 
 		return &vegeta.NetHTTPHitter{
@@ -270,22 +272,38 @@ func newHitter(opts *attackOpts) (vegeta.Hitter, error) {
 	// TODO(tsenart): Add fasthttp support for:
 	//  - opts.redirects
 	//  - opts.connections (max idle conns per host)
-	//  - opts.keepalive
 	//  - opts.proxyHeaders
 	//  - HTTP_PROXY
-	//  - opts.localAddr
+	//  - opts.maxBody
+
+	dialer := fasthttp.TCPDialer{
+		LocalAddr: &net.TCPAddr{
+			IP:   opts.laddr.IP,
+			Zone: opts.laddr.Zone,
+		},
+	}
+
+	cli := &fasthttp.Client{
+		Name:                          "vegeta " + Version,
+		NoDefaultUserAgentHeader:      true,
+		ReadTimeout:                   opts.timeout,
+		TLSConfig:                     tlsc,
+		MaxConnsPerHost:               opts.maxConnections,
+		DisableHeaderNamesNormalizing: true,
+		Dial:                          dialer.Dial,
+	}
+
+	if opts.unixSocket != "" {
+		cli.Dial = func(_ string) (net.Conn, error) {
+			return net.Dial("unix", opts.unixSocket)
+		}
+	}
 
 	return &vegeta.FastHTTPHitter{
-		MaxBody: opts.maxBody,
-		Chunked: opts.chunked,
-		Client: &fasthttp.Client{
-			Name: "vegeta " + Version,
-			NoDefaultUserAgentHeader: true,
-			ReadTimeout:                   opts.timeout,
-			TLSConfig:                     tlsc,
-			MaxConnsPerHost:               opts.maxConnections,
-			DisableHeaderNamesNormalizing: true,
-		},
+		Client:    cli,
+		MaxBody:   opts.maxBody,
+		Chunked:   opts.chunked,
+		KeepAlive: opts.keepalive,
 	}, nil
 }
 
